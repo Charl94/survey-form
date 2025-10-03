@@ -1,31 +1,41 @@
-from flask import Flask, render_template, request, redirect
+from flask import Flask, render_template, request
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import os, json
 
 app = Flask(__name__)
 
-# Kết nối Google Sheets
+# Google Sheets setup
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client = gspread.authorize(creds)
 
-# Dùng Google Sheet ID thay vì tên
-# 👉 Thay YOUR_SHEET_ID bằng ID thật trong link Google Sheet
-SHEET_ID = "1_Iu5lJ1LukSY71gDN7aksSPrzn-ySHVn1ZCzckO9yO4"
-sheet = client.open_by_key(SHEET_ID).sheet1
+# Lấy credentials từ biến môi trường
+creds_json = os.environ.get("GOOGLE_CREDENTIALS")
+if creds_json:
+    creds_dict = json.loads(creds_json)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    sheet = client.open("KQKhaosat").sheet1   # Thay bằng tên Google Sheet của bạn
+else:
+    sheet = None
+    print("⚠️ GOOGLE_CREDENTIALS environment variable not set!")
 
-@app.route("/", methods=["GET", "POST"])
-def survey():
-    if request.method == "POST":
-        name = request.form["name"]
-        email = request.form["email"]
-        feedback = request.form["feedback"]
+@app.route('/')
+def form():
+    return render_template('form.html')
 
-        # Ghi dữ liệu vào Google Sheets
-        sheet.append_row([name, email, feedback])
+@app.route('/submit', methods=['POST'])
+def submit():
+    if sheet is None:
+        return "Google Sheets chưa được kết nối! 🚨"
 
-        return redirect("/")
-    return render_template("form.html")
+    name = request.form.get('name')
+    email = request.form.get('email')
+    feedback = request.form.get('feedback')
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # Thêm dữ liệu vào Google Sheets
+    sheet.append_row([name, email, feedback])
+
+    return f"✅ Cảm ơn {name}, phản hồi của bạn đã được ghi nhận!"
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

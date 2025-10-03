@@ -7,17 +7,16 @@ import os, json
 from datetime import datetime
 
 # --- KHAI BÁO CẤU HÌNH ---
-# Tên Sheet lưu dữ liệu nhân viên (BẠN CẦN LẤY DỮ LIỆU NÀY BẰNG CÁCH KHÁC)
+# Tên Sheet chứa dữ liệu nhân viên
 DATA_SHEET_NAME = "Data" 
 # Tên Sheet lưu kết quả khảo sát
 RESPONSE_SHEET_NAME = "Respond"
-# Tiêu đề Form
+# Tiêu đề Form (Được truyền vào template)
 FORM_TITLE = "BIỂU MẪU KHẢO SÁT NHU CẦU ĐÀO TẠO"
 
 app = Flask(__name__)
 
-# Khởi tạo kết nối Google Sheets (Sử dụng code đã khắc phục lỗi JSON)
-# Cần đảm bảo biến môi trường GOOGLE_CREDENTIALS đã được thiết lập đúng
+# Khởi tạo kết nối Google Sheets
 def setup_google_sheets():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_json = os.environ.get("GOOGLE_CREDENTIALS")
@@ -30,40 +29,41 @@ def setup_google_sheets():
         creds_dict = json.loads(creds_json)
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-        # THAY TÊN GOOGLE SHEET CỦA BẠN VÀO DƯỚI ĐÂY
+        
+        # CHÚ Ý: THAY TÊN FILE GOOGLE SHEET CỦA BẠN VÀO DƯỚI ĐÂY
         spreadsheet = client.open("TÊN FILE GOOGLE SHEET CỦA BẠN") 
+        print("✅ Google Sheets kết nối thành công lúc khởi động.")
         return spreadsheet
     except Exception as e:
-        print(f"🚨 LỖI KẾT NỐI GOOGLE SHEETS: {e}")
+        # Bắt lỗi JSON, API, hoặc kết nối
+        print(f"🚨 LỖI KHỞI TẠO KẾT NỐI GOOGLE SHEETS: {e}")
         return None
 
 # Gọi hàm setup sheets khi ứng dụng khởi động
 SPREADSHEET_CLIENT = setup_google_sheets()
 
 # --- MÔ PHỎNG HÀM LẤY DANH SÁCH NHÂN VIÊN ---
-# LƯU Ý: Flask không thể tự động quét Sheet như GAS. 
-# Bạn phải TẢI DỮ LIỆU NHÂN VIÊN (MaNV, HoTen, BoPhan) và lưu vào một biến Python.
-# Dưới đây là cách mô phỏng:
 def get_employee_list():
     if not SPREADSHEET_CLIENT:
         return []
         
     try:
         data_sheet = SPREADSHEET_CLIENT.worksheet(DATA_SHEET_NAME)
+        # Lấy tất cả giá trị. Tùy chỉnh phạm vi nếu cần tối ưu
         values = data_sheet.get_all_values()
         
-        # Bỏ hàng tiêu đề (hàng 1)
         employee_data = []
-        for row in values[1:]:
-            if row and row[0].strip(): # Chỉ lấy hàng có Mã NV
-                 employee_data.append({
-                    "MaNV": row[0],
-                    "HoTen": row[1] if len(row) > 1 else '',
-                    "BoPhan": row[2] if len(row) > 2 else ''
-                })
+        if len(values) > 1:
+            for row in values[1:]: # Bỏ hàng tiêu đề
+                if row and row[0].strip(): 
+                     employee_data.append({
+                        "MaNV": row[0],
+                        "HoTen": row[1] if len(row) > 1 else '',
+                        "BoPhan": row[2] if len(row) > 2 else ''
+                    })
         return employee_data
     except gspread.WorksheetNotFound:
-        print(f"🚨 Sheet DATA_SHEET_NAME ({DATA_SHEET_NAME}) không tìm thấy.")
+        print(f"🚨 Sheet DATA_SHEET_NAME ({DATA_SHEET_NAME}) không tìm thấy. Không thể tải danh sách NV.")
         return []
     except Exception as e:
         print(f"🚨 LỖI LẤY DANH SÁCH NV: {e}")
@@ -73,35 +73,39 @@ def get_employee_list():
 
 @app.route('/', methods=['GET'])
 def index():
-    # Render form khảo sát
-    return render_template('survey_form.html', form_title=FORM_TITLE)
+    # SỬA LỖI TemplateNotFound: Đã thay 'survey_form.html' bằng 'form.html'
+    return render_template('form.html', form_title=FORM_TITLE) 
 
 @app.route('/get_employees', methods=['GET'])
 def get_employees_route():
     # API endpoint để JavaScript lấy danh sách nhân viên
     employee_list = get_employee_list()
+    # Nếu danh sách trống, logs sẽ hiển thị lỗi SheetNotFound hoặc kết nối ở hàm trên
     return jsonify(employee_list)
 
 @app.route('/submit', methods=['POST'])
 def submit_form():
     if not SPREADSHEET_CLIENT:
-        return jsonify({"status": "error", "message": "Lỗi kết nối Google Sheets."}), 500
+        return jsonify({"status": "error", "message": "Lỗi kết nối Google Sheets. Vui lòng kiểm tra Logs."}), 500
         
     try:
-        form_data = request.form.to_dict(flat=False) # Lấy dữ liệu form
+        form_data = request.form.to_dict(flat=False) 
         
-        # Xử lý các trường checkbox (như trong code JS của bạn)
-        nhu_cau_dt = "; ".join(form_data.get('NhuCauDT', []))
+        # Xử lý các trường checkbox (NhuCauDT và HinhThucDT)
+        nhu_cau_dt_values = form_data.get('NhuCauDT', [])
         hinh_thuc_dt = "; ".join(form_data.get('HinhThucDT', []))
         
         # Xử lý trường "Khác" trong Nhu Cầu ĐT
         other_text = form_data.get('NhuCauDT_OtherText', [''])[0]
         if other_text and other_text.strip():
-            nhu_cau_dt += f"; Khác: {other_text}" if nhu_cau_dt else f"Khác: {other_text}"
+            # Thêm giá trị 'Khác' vào danh sách nếu có
+            nhu_cau_dt_values.append(f"Khác: {other_text}")
+            
+        nhu_cau_dt = "; ".join(nhu_cau_dt_values)
 
         response_sheet = SPREADSHEET_CLIENT.worksheet(RESPONSE_SHEET_NAME)
 
-        # Định nghĩa và ghi tiêu đề nếu sheet trống (GIỐNG HỆT CẤU TRÚC LOGIC GAS)
+        # Kiểm tra và ghi tiêu đề (GIỮ NGUYÊN LOGIC GAS)
         if response_sheet.row_count < 1 or not response_sheet.row_values(1) or response_sheet.row_values(1)[0] == '':
              headers = [
                 "Thời Gian Gửi", "Mã NV", "Họ và Tên", "Bộ phận", "Thâm niên", 
@@ -140,8 +144,9 @@ def submit_form():
         return jsonify({"status": "success", "message": "Gửi khảo sát thành công!"})
 
     except Exception as e:
+        # Nếu có lỗi trong quá trình ghi dữ liệu hoặc xử lý form
         print(f"🚨 LỖI XỬ LÝ FORM: {e}")
-        return jsonify({"status": "error", "message": f"Lỗi server: {str(e)}"}), 500
+        return jsonify({"status": "error", "message": f"Lỗi server khi ghi dữ liệu: {str(e)}"}), 500
 
 if __name__ == '__main__':
     # Chỉ chạy local
